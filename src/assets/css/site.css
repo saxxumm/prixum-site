@@ -23,8 +23,10 @@
   --glow-a: rgba(255, 95, 162, 0.36);
   --glow-a-strong: rgba(255, 95, 162, 0.58);
   --glow-b: rgba(138, 92, 255, 0.34);
-  --petal-a: #ffc4dd;
-  --petal-b: #ff8cc6;
+  --petal-light: #fff3f8;
+  --petal-mid: #ffbcd9;
+  --petal-deep: #ff79b4;
+  --petal-alpha: 0.85;
   --mascot-glow: rgba(255, 95, 162, 0.62);
   --shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.9);
   --display: "Unbounded", "Golos Text", system-ui, sans-serif;
@@ -56,8 +58,10 @@
   --glow-a: rgba(255, 120, 182, 0.30);
   --glow-a-strong: rgba(230, 65, 138, 0.42);
   --glow-b: rgba(160, 120, 255, 0.20);
-  --petal-a: #ffc9df;
-  --petal-b: #ff94c4;
+  --petal-light: #ffe4f0;
+  --petal-mid: #ff9fca;
+  --petal-deep: #ea4f96;
+  --petal-alpha: 0.9;
   --mascot-glow: rgba(255, 105, 170, 0.55);
   --shadow: 0 40px 80px -42px rgba(122, 40, 92, 0.42);
 }
@@ -73,6 +77,7 @@ body {
   font: 400 17px/1.6 var(--body);
   -webkit-font-smoothing: antialiased;
   overflow-x: clip;
+  isolation: isolate; /* the glows and petals sit at negative z-index, above this background and under the page */
 }
 img, video, canvas { display: block; max-width: 100%; }
 img, video { height: auto; }

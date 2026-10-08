@@ -56,79 +56,193 @@
   }
 
   /* ---------- sakura petals ---------- */
+  // Petals are drawn once into small sprites (front and back, two tints, sharp and out of focus) and then only moved:
+  // each one tumbles in 3D (the width follows the cosine of its flip, the back side shows when it turns over), sways,
+  // rides a wind with slow gusts, drifts with the page at its own depth and gets blown aside by the mouse.
   const petalCanvas = document.getElementById("petals");
   if (petalCanvas) {
     const ctx = petalCanvas.getContext("2d");
+    const SPRITE = 64; // petal height in sprite pixels
+    let sprites = null, tint = 1;
     let petals = [];
-    let width = 0, height = 0, ratio = 1, frame = 0, last = 0;
-    const colors = () => {
+    let width = 0, height = 0, ratio = 1, frame = 0, last = 0, clock = 0, scroll = window.scrollY;
+    let gust = { start: 8, length: 3.5, power: 0 };
+    const mouse = { x: -1e4, y: -1e4, vx: 0, vy: 0, at: 0 };
+
+    // half a petal, tip (with the notch) at the top, the narrow base at the bottom; x and y in petal heights
+    function outline(g, h) {
+      const p = (x, y) => [x * h, y * h];
+      g.beginPath();
+      g.moveTo(...p(0, 0.14));
+      g.bezierCurveTo(...p(0.07, 0.02), ...p(0.29, -0.02), ...p(0.39, 0.1));
+      g.bezierCurveTo(...p(0.49, 0.22), ...p(0.45, 0.48), ...p(0.3, 0.7));
+      g.bezierCurveTo(...p(0.2, 0.84), ...p(0.07, 0.97), ...p(0, 1));
+      g.bezierCurveTo(...p(-0.07, 0.97), ...p(-0.2, 0.84), ...p(-0.3, 0.7));
+      g.bezierCurveTo(...p(-0.45, 0.48), ...p(-0.49, 0.22), ...p(-0.39, 0.1));
+      g.bezierCurveTo(...p(-0.29, -0.02), ...p(-0.07, 0.02), ...p(0, 0.14));
+      g.closePath();
+    }
+    function sprite(colors, back, blur) {
+      const pad = Math.ceil(blur * 2.5) + 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.ceil(SPRITE) + pad * 2;
+      canvas.height = SPRITE + pad * 2;
+      const g = canvas.getContext("2d");
+      if (blur) g.filter = `blur(${blur}px)`;
+      g.translate(canvas.width / 2, pad);
+      const fill = g.createLinearGradient(0, 0, 0, SPRITE);
+      fill.addColorStop(0, back ? colors.mid : colors.light);
+      fill.addColorStop(0.55, colors.mid);
+      fill.addColorStop(1, colors.deep);
+      outline(g, SPRITE);
+      g.fillStyle = fill;
+      g.fill();
+      g.save();
+      g.clip();
+      if (back) {
+        g.fillStyle = "rgba(70, 0, 40, 0.14)";
+        g.fillRect(-SPRITE, 0, SPRITE * 2, SPRITE);
+      } else {
+        const shine = g.createRadialGradient(-0.12 * SPRITE, 0.32 * SPRITE, 0, -0.12 * SPRITE, 0.32 * SPRITE, 0.42 * SPRITE);
+        shine.addColorStop(0, "rgba(255, 255, 255, 0.45)");
+        shine.addColorStop(1, "rgba(255, 255, 255, 0)");
+        g.fillStyle = shine;
+        g.fillRect(-SPRITE, 0, SPRITE * 2, SPRITE);
+        if (!blur) {
+          g.strokeStyle = "rgba(255, 255, 255, 0.4)";
+          g.lineWidth = 1.3;
+          g.lineCap = "round";
+          for (const side of [-1, 0, 1]) {
+            g.beginPath();
+            g.moveTo(0, 0.93 * SPRITE);
+            g.quadraticCurveTo(side * 0.08 * SPRITE, 0.6 * SPRITE, side * 0.2 * SPRITE, (side ? 0.3 : 0.26) * SPRITE);
+            g.stroke();
+          }
+        }
+      }
+      g.restore();
+      return { canvas, x: canvas.width / 2, y: pad + SPRITE * 0.55 };
+    }
+    function paint() {
       const style = getComputedStyle(document.documentElement);
-      return [style.getPropertyValue("--petal-a").trim(), style.getPropertyValue("--petal-b").trim()];
+      const token = (name) => style.getPropertyValue(name).trim();
+      const pale = { light: token("--petal-light"), mid: token("--petal-mid"), deep: token("--petal-deep") };
+      const rosy = { light: token("--petal-mid"), mid: token("--petal-mid"), deep: token("--petal-deep") };
+      tint = parseFloat(token("--petal-alpha")) || 0.8;
+      // sprites[tone][back][soft]
+      sprites = [pale, rosy].map((colors) => [false, true].map((back) => [0, 5].map((blur) => sprite(colors, back, blur))));
+    }
+    const spawn = (p, anywhere) => {
+      p.x = anywhere ? Math.random() * width : Math.random() * (width * 1.15) - width * 0.15;
+      p.y = anywhere ? Math.random() * height : -30 - Math.random() * 60;
+      p.vx = 0;
+      p.vy = 0;
+      p.fall = 18 + Math.random() * 14;
+      p.drift = 10 + Math.random() * 16;
+      p.phase = Math.random() * Math.PI * 2;
+      p.angle = Math.random() * Math.PI * 2;
+      p.spin = (Math.random() - 0.5) * 1.6;
+      p.flip = Math.random() * Math.PI * 2;
+      p.flipSpeed = 1.1 + Math.random() * 1.6;
+      p.tone = Math.random() < 0.55 ? 0 : 1;
+      return p;
     };
-    let palette = colors();
-    document.addEventListener("themechange", () => { palette = colors(); });
-    const spawn = (anywhere) => ({
-      x: Math.random() * width,
-      y: anywhere ? Math.random() * height : -20,
-      size: 7 + Math.random() * 7,
-      fall: 14 + Math.random() * 18,
-      drift: 8 + Math.random() * 14,
-      phase: Math.random() * Math.PI * 2,
-      spin: (Math.random() - 0.5) * 1.2,
-      angle: Math.random() * Math.PI * 2,
-      tone: Math.random() < 0.5 ? 0 : 1,
-      alpha: 0.35 + Math.random() * 0.35,
-    });
+    function petal() {
+      const z = 0.5 + Math.pow(Math.random(), 1.6) * 1.1; // mostly far and small, a few close and out of focus
+      const soft = z > 1.35;
+      return spawn({ z, soft, size: (6 + 14 * z) * (soft ? 1.3 : 1), alpha: soft ? 0.62 : 0.5 + 0.45 * Math.min(1, (z - 0.5) / 0.7) }, true);
+    }
     function resize() {
       ratio = Math.min(2, window.devicePixelRatio || 1);
       width = window.innerWidth;
       height = window.innerHeight;
       petalCanvas.width = Math.round(width * ratio);
       petalCanvas.height = Math.round(height * ratio);
-      const count = Math.round(Math.min(26, Math.max(10, width / 60)));
-      while (petals.length < count) petals.push(spawn(true));
+      const count = Math.round(Math.min(42, Math.max(14, (width * height) / 36000)));
+      while (petals.length < count) petals.push(petal());
       petals.length = count;
+      petals.sort((a, b) => a.z - b.z);
     }
-    function petal(p) {
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.angle);
-      ctx.scale(1, 0.62 + 0.38 * Math.sin(p.phase * 1.7));
-      ctx.globalAlpha = p.alpha;
-      ctx.fillStyle = palette[p.tone];
-      ctx.beginPath();
-      // a sakura petal: round body with a small notch at the tip
-      ctx.moveTo(0, -p.size);
-      ctx.bezierCurveTo(p.size * 0.95, -p.size * 0.7, p.size * 0.8, p.size * 0.7, 0, p.size);
-      ctx.bezierCurveTo(-p.size * 0.8, p.size * 0.7, -p.size * 0.95, -p.size * 0.7, -p.size * 0.18, -p.size * 0.92);
-      ctx.lineTo(0, -p.size * 0.72);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
+    function wind(t) {
+      if (t > gust.start + gust.length) {
+        gust = { start: t + 9 + Math.random() * 12, length: 2.5 + Math.random() * 2.5, power: 35 + Math.random() * 35 };
+      }
+      const g = t > gust.start ? Math.sin((Math.PI * (t - gust.start)) / gust.length) ** 2 * gust.power : 0;
+      return { speed: 9 + 10 * Math.sin(t * 0.11) + 6 * Math.sin(t * 0.27 + 1.3) + g, gust: g };
     }
+    window.addEventListener("pointermove", (event) => {
+      if (event.pointerType !== "mouse") return;
+      const now = performance.now();
+      const dt = Math.max(8, now - mouse.at);
+      if (now - mouse.at < 120) {
+        mouse.vx = Math.max(-2500, Math.min(2500, ((event.clientX - mouse.x) / dt) * 1000));
+        mouse.vy = Math.max(-2500, Math.min(2500, ((event.clientY - mouse.y) / dt) * 1000));
+      }
+      mouse.x = event.clientX;
+      mouse.y = event.clientY;
+      mouse.at = now;
+    }, { passive: true });
+
     function tick(time) {
       frame = 0;
       const dt = last ? Math.min(0.05, (time - last) / 1000) : 0;
       last = time;
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-      ctx.clearRect(0, 0, width, height);
+      clock += dt;
+      const air = wind(clock);
+      const scrolled = window.scrollY - scroll;
+      scroll = window.scrollY;
+      const stirred = time - mouse.at < 90;
+      const reach = 150;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, petalCanvas.width, petalCanvas.height);
       for (const p of petals) {
+        if (stirred) {
+          const dx = p.x - mouse.x, dy = p.y - mouse.y;
+          const d = Math.hypot(dx, dy);
+          if (d < reach) {
+            const f = (1 - d / reach) ** 2 * Math.min(1, dt * 10);
+            p.vx += (mouse.vx * 0.45 - p.vx) * f;
+            p.vy += (mouse.vy * 0.3 - p.vy) * f;
+            p.spin += (mouse.vx / 600) * f;
+          }
+        }
+        p.vx *= Math.exp(-dt * 1.3);
+        p.vy *= Math.exp(-dt * 1.6);
+        if (Math.abs(p.spin) > 0.8) p.spin *= Math.exp(-dt * 0.6); // a swat spins it fast, then it calms down
         p.phase += dt;
-        p.y += p.fall * dt;
-        p.x += Math.sin(p.phase) * p.drift * dt;
+        p.flip += p.flipSpeed * dt * (1 + air.gust / 40);
         p.angle += p.spin * dt;
-        if (p.y > height + 20) Object.assign(p, spawn(false));
-        petal(p);
+        const sx = Math.cos(p.flip);
+        const edge = 1 - Math.abs(sx);
+        p.x += (air.speed * (0.55 + 0.45 * p.z) + Math.sin(p.phase) * p.drift + p.vx) * dt;
+        p.y += (p.fall * p.z * (0.8 + 0.45 * edge) + p.vy) * dt - scrolled * 0.18 * p.z; // edge-on falls faster
+        if (p.y > height + 40) spawn(p, false);
+        else if (p.y < -90) p.y = height + 30;
+        if (p.x > width + 50) { p.x = -40; p.y = Math.random() * height * 0.8; }
+        else if (p.x < -60) p.x = width + 40;
+
+        const image = sprites[p.tone][sx < 0 ? 1 : 0][p.soft ? 1 : 0];
+        const k = (p.size / SPRITE) * ratio;
+        const fx = (Math.abs(sx) < 0.1 ? 0.1 : Math.abs(sx)) * k;
+        const fy = (0.82 + 0.18 * Math.sin(p.flip * 0.6 + p.phase)) * k;
+        const cos = Math.cos(p.angle), sin = Math.sin(p.angle);
+        ctx.setTransform(cos * fx, sin * fx, -sin * fy, cos * fy, p.x * ratio, p.y * ratio);
+        ctx.globalAlpha = p.alpha * tint;
+        ctx.drawImage(image.canvas, -image.x, -image.y);
       }
+      ctx.globalAlpha = 1;
       if (!document.hidden && !still.matches) frame = requestAnimationFrame(tick);
     }
     const start = () => {
       if (still.matches) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, petalCanvas.width, petalCanvas.height);
         return;
       }
-      if (!frame && !document.hidden) { last = 0; frame = requestAnimationFrame(tick); }
+      if (!frame && !document.hidden) { last = 0; scroll = window.scrollY; frame = requestAnimationFrame(tick); }
     };
+    paint();
+    document.addEventListener("themechange", paint);
     resize();
     window.addEventListener("resize", resize);
     document.addEventListener("visibilitychange", start);
